@@ -23,16 +23,18 @@ import subprocess
 import tempfile
 import git
 
+DOMAIN = 'example.com'
+CC_EMAIL = 'code-review@example.com'
 
 usage = """
-%prog -r <reviewer> [-r <another-reviewer>] [-s <summary>] [-m <message>] [options] {<since>|<revision-range>}
+%%prog -r <reviewer> [-r <another-reviewer>] [-s <summary>] [-m <message>] [options] {<since>|<revision-range>}
 
-Send a patch series for review.  Sends mail to the reviewer, CC devel@,
-identifying the commits to be reviewed.
+Send a patch series for review.  Sends mail to the reviewer,
+CC %s, identifying the commits to be reviewed.
 
 Name a range of commits, or name a single commit (e.g., 'HEAD^' or
 'origin/master') to identify all commits on HEAD since that commit.
-""".strip()
+""".strip() % CC_EMAIL
 
 
 def show_usage(args):
@@ -59,9 +61,7 @@ def parse_options(args):
   reviewers_fixed = []
   for reviewer in options.reviewers:
     if '@' not in reviewer:
-      reviewers_fixed.append(reviewer + '@ksplice.com')
-    elif '@mit.edu' in reviewer:
-      parser.error("You probably meant @ksplice.com, not @mit.edu\n(Remove this check if you really mean @mit.edu)")
+      reviewers_fixed.append(reviewer + '@' + DOMAIN)
     else:
       reviewers_fixed.append(reviewer)
   options.reviewers = reviewers_fixed
@@ -86,7 +86,7 @@ def write_mail(out, repo, opts, revs):
 
   print >>out, 'From: ' + me
   print >>out, 'To: ' + ', '.join(opts.reviewers)
-  print >>out, 'Cc: code-review@ksplice.com'
+  print >>out, 'Cc: ' + CC_EMAIL
   print >>out, 'Subject: %s review: %s' % (reponame, summary)
   print >>out
   print >>out, 'Dear %s,' % ", ".join(opts.reviewers)
