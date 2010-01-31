@@ -1,0 +1,137 @@
+#!/usr/bin/python
+#
+# Copyright (C) 2010 Ksplice, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Author: Greg Price <price@ksplice.com>
+
+import sys
+import os
+import optparse
+import subprocess
+import tempfile
+import git
+
+
+usage = """
+%prog -r <reviewer> [-r <another-reviewer>] [-s <summary>] [-m <message>] [options] {<since>|<revision-range>}
+
+Send a patch series for review.  Sends mail to the reviewer, CC devel@,
+identifying the commits to be reviewed.
+
+Name a range of commits, or name a single commit (e.g., 'HEAD^' or
+'origin/master') to identify all commits on HEAD since that commit.
+""".strip()
+
+
+def show_usage(args):
+  print >>sys.stderr, usage
+  return 2
+
+
+def parse_options(args):
+  parser = optparse.OptionParser(usage)
+  parser.add_option('-r', '--reviewer', type='string', dest='reviewers', action="append",
+                    help='the person you are asking to do the review')
+  parser.add_option('--stdout', action='store_true', dest='stdout',
+                    help='send to standard output rather than send mail')
+  parser.add_option('--format', type='choice', dest='format',
+                    choices=['oneline', 'message', 'patch'],
+                    help="'patch' (default for one commit), 'message' (default for more), or 'oneline'")
+  parser.add_option('-s', '--summary', type='string', dest='summary',
+                    help='summary for subject line')
+  parser.add_option('-m', '--message', type='string', dest='message',
+                    help='message for body of email')
+  options, args = parser.parse_args(args)
+  if not options.reviewers:
+    parser.error('reviewer required')  
+  reviewers_fixed = []
+  for reviewer in options.reviewers:
+    if '@' not in reviewer:
+      reviewers_fixed.append(reviewer + '@ksplice.com')
+    elif '@mit.edu' in reviewer:
+      parser.error("You probably meant @ksplice.com, not @mit.edu\n(Remove this check if you really mean @mit.edu)")
+    else:
+      reviewers_fixed.append(reviewer)
+  options.reviewers = reviewers_fixed
+  if len(args) < 2:
+    parser.error('must specify revision(s) to be reviewed')
+  return options, args
+
+
+def parse_revs(repo, args):
+  if len(args) == 1 and '..' not in args[0]:
+      return list(repo.commits_between(args[0], 'HEAD'))
+  return [repo.commit(c) for c in repo.git.rev_list('--reverse', *args).split()]
+
+
+def write_mail(out, repo, opts, revs):
+  ident = repo.git.var('GIT_AUTHOR_IDENT')
+  me = ident[:ident.rindex('>') + 1]
+  reponame = os.path.basename(repo.wd)
+  objective_summary = '%d commit(s) to %s' % (len(revs), revs[-1].id_abbrev)
+  summary = ('%s (%s)' % (opts.summary, objective_summary) if opts.summary
+             else objective_summary)
+
+  print >>out, 'From: ' + me
+  print >>out, 'To: ' + ', '.join(opts.reviewers)
+  print >>out, 'Cc: code-review@ksplice.com'
+  print >>out, 'Subject: %s review: %s' % (reponame, summary)
+  print >>out
+  print >>out, 'Dear %s,' % ", ".join(opts.reviewers)
+  print >>out
+  print >>out, 'At your convenience, please review the following commits.'
+  print >>out, 'Reply with any comments, or advance master when you are satisfied.'
+  print >>out
+  if opts.message:
+    print >>out, opts.message
+    print >>out
+  print >>out, 'Thanks,'
+  print >>out, me
+  print >>out
+  print >>out
+  if opts.format == 'oneline':
+    for r in revs:
+      print >>out, repo.git.log('-n1', '--oneline', r)
+  elif opts.format == 'message' or opts.format is None and len(revs) > 1:
+    for r in revs:
+      print >>out, repo.git.log('-n1', '--stat', r)
+      print >>out
+  elif opts.format == 'patch' or opts.format is None and len(revs) == 1:
+    print >>out, repo.git.show('--stat', '-p', *revs)
+  else:
+    this_is_an_error
+
+
+def main(args):
+  opts, args = parse_options(args)
+  repo = git.Repo()
+  revs = parse_revs(repo, args[1:])
+  if not revs:
+    print >>sys.stderr, '%s: no revisions specified' % os.path.basename(args[0])
+    return 2
+  if opts.stdout:
+    out = sys.stdout
+  else:
+    outfd, outname = tempfile.mkstemp(prefix='review-')
+    out = file(outname, 'w')
+  write_mail(out, repo, opts, revs)
+  if not opts.stdout:
+    out.close()
+    subprocess.check_call(['/usr/sbin/sendmail', '-bm', '-t'],
+                          stdin=file(outname))
+
+
+if __name__ == '__main__':
+  sys.exit(main(sys.argv))
